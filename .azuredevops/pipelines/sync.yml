@@ -5,7 +5,14 @@ parameters:
   default: true
 
 trigger:
-- none
+  branches:
+    include:
+    - develop
+    - master
+  paths:
+    exclude:
+    - .azuredevops/**
+    - .github/**
 
 # Fill in the release pipeline path in 'source'
 resources:
