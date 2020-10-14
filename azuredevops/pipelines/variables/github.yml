@@ -4,7 +4,7 @@ variables:
 - name: gitHubRepoUrl
   value: 'https://$(gitHubRepoPat)@github.com/$(gitHubOrganization)/$(Build.Repository.Name).git'
 - name: gitHubNugetFeedCredentials
-  value: 'github.com_bapcabrera'
+  value: 'GitHub-BaptisteCabrera'
 - name: gitHubProjectUrl
   value: 'https://github.com/$(gitHubOrganization)/$(Build.Repository.Name)'
 - name: gitHubRepositorytUrl
