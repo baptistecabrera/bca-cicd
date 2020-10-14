@@ -1,0 +1,3 @@
+variables:
+- name: psIcon
+  value: 'https://www.powershellgallery.com/Content/Images/Branding/packageDefaultIcon.png'

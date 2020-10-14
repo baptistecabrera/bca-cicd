@@ -1,0 +1,54 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: nugetName
+  type: string
+- name: nugetFeed
+  type: string
+- name: nugetPush
+  type: boolean
+  default: true
+    
+steps:
+- task: DownloadPipelineArtifact@2
+  displayName: 'Download Pipeline Artifact'
+  inputs:
+    artifact: '$(Build.DefinitionName)-$(Build.BuildNumber)'
+    path: '$(Pipeline.Workspace)'
+- ${{ if eq(parameters.psType, 'Script') }}:
+  - powershell: |
+      Remove-Item *.Tests.ps1 -Force
+      #Remove-Item LICENSE* -Force
+    displayName: 'Remove unused files from package'
+    workingDirectory: '$(Pipeline.Workspace)'
+- task: NuGetCommand@2
+  displayName: 'NuGet Pack'
+  inputs:
+    command: pack
+    packagesToPack: '$(Pipeline.Workspace)/${{ parameters.nugetName }}.nuspec'
+    packDestination: '$(Pipeline.Workspace)'
+- powershell: 'Get-ChildItem -Path $(Pipeline.Workspace) -Recurse'
+  displayName: 'List Package Content'
+- task: NuGetCommand@2
+  displayName: 'Push NuGet Package'
+  inputs:
+    command: push
+    packagesToPush: '$(Pipeline.Workspace)/${{ parameters.nugetName }}*.nupkg'
+    publishVstsFeed: '${{ parameters.nugetFeed }}'
+  condition: |
+    and(
+        succeeded(),
+        eq(variables['Build.SourceBranchName'], 'master'),
+        or(
+            eq(${{ parameters.nugetPush }}, true),
+            eq(variables['Build.Reason'], 'IndividualCI')
+        )
+    )
+  env:
+    SYSTEM_ACCESSTOKEN: $(system.accesstoken)

@@ -1,0 +1,7 @@
+variables:
+- name: chocoFeedName
+  value: 'bca-choco'
+- name: chocoFeedUrl
+  value: 'https://pkgs.dev.azure.com/baptistecabrera/_packaging/$(chocoFeedName)/nuget/v2'
+- name: chocoOrgFeedUrl
+  value: 'https://push.chocolatey.org/'

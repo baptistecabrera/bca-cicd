@@ -1,0 +1,427 @@
+parameters:
+- name: psName
+  type: string
+- name: artifactPath
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: nugetName
+  type: string
+- name: nugetFeed
+  type: string
+- name: nugetPub
+  type: boolean
+  default: true
+- name: psGalPub
+  type: boolean
+  default: true
+- name: gitHubPub
+  type: boolean
+  default: true
+- name: chocoName
+  type: string
+- name: chocoFeed
+  type: string
+- name: chocoPub
+  type: boolean
+  default: false
+- name: testWindows
+  type: boolean
+  default: true
+- name: testLinux
+  type: boolean
+  default: true
+- name: testMacOs
+  type: boolean
+  default: true
+
+stages: 
+- stage: Initialization
+  displayName: Release Initialization
+  jobs:
+  - deployment: Initialization
+    displayName: Initialize Release
+    environment: Initialization
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - template: steps/ps/getVersion.yml
+            parameters:
+              psName: ${{ parameters.psName }}
+              psType: ${{ parameters.psType }}
+              sourceDirectory: '${{ parameters.artifactPath }}'
+          - powershell: Write-Host "##vso[build.updatebuildnumber]$(getVersion.packageVersion)-$(Build.BuildNumber)"
+            displayName: Set Release Number
+
+- stage: NugetPrerelease
+  displayName: NuGet Prerelease
+  dependsOn: Initialization
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  jobs:
+  - job: TestWindows
+    displayName: Test ${{ parameters.psType }} on Windows
+    condition: eq('${{ parameters.testWindows }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVSVm]'
+    steps:
+    - template: steps/ps/prereleaseNugetTest.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        nugetName: ${{ parameters.nugetName }}
+        nugetFeed: ${{ parameters.nugetFeed }}
+  - job: TestLinux
+    displayName: Test ${{ parameters.psType }} on Linux
+    condition: eq('${{ parameters.testLinux }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolLinuxVm]'
+    steps:
+    - template: steps/ps/prereleaseNugetTest.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        nugetName: ${{ parameters.nugetName }}
+        nugetFeed: ${{ parameters.nugetFeed }}
+  - job: TestMacOs
+    displayName: Test ${{ parameters.psType }} on MacOS
+    condition: eq('${{ parameters.testMacOs }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolMacOsVm]'
+    steps:
+    - template: steps/ps/prereleaseNugetTest.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        nugetName: ${{ parameters.nugetName }}
+        nugetFeed: ${{ parameters.nugetFeed }}
+  - deployment: Promote
+    displayName: Promote NuGet Package
+    environment: PreRelease
+    dependsOn:
+      - TestWindows
+      - TestLinux
+      - TestMacOs
+    condition: |
+      and(
+        in(dependencies.TestWindows.result, 'Succeeded', 'SucceededWithIssues', 'Skipped'),
+        in(dependencies.TestLinux.result, 'Succeeded', 'SucceededWithIssues', 'Skipped'),
+        in(dependencies.TestMacOs.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
+      )
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.nugetFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.nugetName }}
+              version: $(version)
+              releaseView: 'Prerelease'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+
+- stage: ChocoPrerelease
+  displayName: Chocolatey Prerelease
+  dependsOn: Initialization
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVSVm]'
+  jobs:
+  - job: TestWindows
+    displayName: Test ${{ parameters.psType }} on Windows
+    condition: eq('${{ parameters.testWindows }}', true)
+    steps:
+    - template: steps/ps/prereleaseChocoTest.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        chocoName: ${{ parameters.chocoName }}
+        chocoFeed: ${{ parameters.chocoFeed }}
+  - deployment: Promote
+    displayName: Promote Chocolatey Package
+    environment: PreRelease
+    dependsOn: TestWindows
+    condition: in(dependencies.TestWindows.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.chocoFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.chocoName }}
+              version: $(version)
+              releaseView: 'Prerelease'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+
+- stage: NugetRelease
+  displayName: NuGet Release
+  dependsOn:
+    - Initialization
+    - NugetPrerelease
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  condition: in(dependencies.NugetPrerelease.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
+  jobs:
+  - job: NugetRelease
+    displayName: Release NuGet Package
+    steps:
+    - checkout: none
+    - task: DownloadPackage@1
+      displayName: Download Package
+      inputs:
+        packageType: 'nuget'
+        feed: '/${{ parameters.nugetFeed }}'
+        definition: ${{ parameters.nugetName }}
+        version: $(version)
+        extract: false
+        downloadPath: $(Pipeline.Workspace)
+    - task: NuGetCommand@2
+      displayName: 'Push Package to NuGet.Org'
+      condition: |
+        and(
+            succeeded(),
+            eq(${{ parameters.nugetPub }}, true)
+        )
+      inputs:
+        command: push
+        packagesToPush: '$(Pipeline.Workspace)/${{ parameters.nugetName }}.nupkg'
+        nuGetFeedType: external
+        publishFeedCredentials: $(nugetOrgFeedCredentials)
+  - deployment: Promote
+    dependsOn: NugetRelease
+    displayName: Promote NuGet Package
+    environment: Release
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.nugetFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.nugetName }}
+              version: $(version)
+              releaseView: 'NuGetRelease'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+
+- stage: PSGalleryRelease
+  displayName: PowerShell Gallery Release
+  dependsOn:
+    - Initialization
+    - NugetPrerelease
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  jobs:
+  - job: PSGalleryPublish
+    displayName: Publish ${{ parameters.psType }} to PS Gallery
+    condition: eq('${{ parameters.psGalPub }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVSVm]'
+    steps:
+    - checkout: none
+    - template: steps/ps/installFromNugetFeed.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        nugetName: ${{ parameters.nugetName }}
+        nugetFeed: ${{ parameters.nugetFeed }}
+    - ${{ if eq(parameters.psType, 'Script') }}:
+      - template: steps/ps/getBasePath.yml
+        parameters:
+          psName: ${{ parameters.psName }}
+          psType: ${{ parameters.psType }}
+          version: $(version)
+    - powershell: |
+        switch ('${{ parameters.psType }}')
+        {
+          "Module" { Publish-Module -Name ${{ parameters.psName }} -NuGetApiKey $env:PSGAL_API_KEY }
+          "Script" { Publish-Script -Path (Join-Path '$(getBasePath.basePath)' '${{ parameters.psName }}.ps1') -NuGetApiKey $env:PSGAL_API_KEY }
+        }
+      displayName: 'Publish ${{ parameters.psType }} to PowerShell Gallery'
+      condition: |
+        and(
+            succeeded(),
+            eq(${{ parameters.psGalPub }}, true)
+        )
+      env:
+        PSGAL_API_KEY: $(psGalleryApiKey)
+  - deployment: Promote
+    dependsOn: PSGalleryPublish
+    displayName: Promote NuGet Package
+    environment: Release
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.nugetFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.nugetName }}
+              version: $(version)
+              releaseView: 'PSGalleryRelease'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+
+- stage: GitHubRelease
+  displayName: GitHub Release
+  dependsOn:
+    - Initialization
+    - NugetPrerelease
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  condition: in(dependencies.NugetPrerelease.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
+  jobs:
+  - job: GitHubRelease
+    displayName: Release GitHub Package
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVSVm]'
+    steps:
+    - checkout: none
+    - task: DownloadPackage@1
+      displayName: Download Package
+      inputs:
+        packageType: 'nuget'
+        feed: '/${{ parameters.nugetFeed }}'
+        definition: ${{ parameters.nugetName }}
+        version: $(version)
+        extract: false
+        downloadPath: $(Pipeline.Workspace)
+    - task: NuGetCommand@2
+      displayName: 'Push Package to GitHub.com'
+      condition: |
+        and(
+            succeeded(),
+            eq(${{ parameters.gitHubPub }}, true)
+        )
+      inputs:
+        command: push
+        packagesToPush: '$(Pipeline.Workspace)/${{ parameters.nugetName }}.nupkg'
+        nuGetFeedType: external
+        publishFeedCredentials: $(gitHubNugetFeedCredentials)
+  - deployment: Promote
+    dependsOn: GitHubRelease
+    displayName: Promote NuGet Package
+    environment: Release
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.nugetFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.nugetName }}
+              version: $(version)
+              releaseView: 'GitHubRelease'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+
+- stage: ChocoRelease
+  displayName: Chocolatey Release
+  dependsOn:
+    - Initialization
+    - ChocoPrerelease
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVSVm]'
+  condition: in(dependencies.ChocoPrerelease.result, 'Succeeded', 'SucceededWithIssues', 'Skipped')
+  jobs:
+  - job: ChocoRelease
+    displayName: Release Choco Package
+    steps:
+    - checkout: none
+    - task: DownloadPackage@1
+      displayName: Download Package
+      inputs:
+        packageType: 'nuget'
+        feed: '/${{ parameters.chocoFeed }}'
+        definition: ${{ parameters.chocoName }}
+        version: $(version)
+        extract: false
+        downloadPath: $(Pipeline.Workspace)
+    - task: gep13.chocolatey-azuredevops.chocolatey-azuredevops.ChocolateyCommand@0
+      displayName: 'Push Package to Chocolatey.org'
+      condition: |
+        and(
+            succeeded(),
+            eq(${{ parameters.chocoPub }}, true)
+        )
+      inputs:
+        command: push
+        pushWorkingDirectory: '$(Pipeline.Workspace)'
+        pushNupkgFileName: '${{ parameters.chocoName }}.nupkg'
+        pushSource: '$(chocoOrgFeedUrl)'
+        pushApikey: '$(chocoApiKey)'
+  - deployment: Promote
+    dependsOn: ChocoRelease
+    displayName: Promote Chocolatey Package
+    environment: Release
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: none
+          - task: rvo-vsts-promotepackage-task@3
+            displayName: "Promote Package to Prerelease View"
+            inputs:
+              feed: ${{ parameters.chocoFeed }}
+              inputType: 'nameVersion'
+              definition:  ${{ parameters.chocoName }}
+              version: $(version)
+              releaseView: 'Release'
+            env:
+              SYSTEM_ACCESSTOKEN: $(system.accesstoken)

@@ -1,0 +1,31 @@
+parameters:
+- name: chocoName
+  type: string
+- name: chocoFeed
+  type: string
+- name: version
+  type: string
+
+steps:
+- task: gep13.chocolatey-azuredevops.chocolatey-azuredevops.ChocolateyCommand@0
+  displayName: Add Chocolatey Source ${{ parameters.chocoFeed }}
+  inputs:
+    command: source
+    sourceSourceName: ${{ parameters.chocoFeed }}
+    sourceSource: $(chocoFeedUrl)
+    user: $(chocoFeedUserName)
+    password: $(chocoFeedPassword)
+  env:
+    SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+- task: gep13.chocolatey-azuredevops.chocolatey-azuredevops.ChocolateyCommand@0
+  displayName: Install Chocolatey Package ${{ parameters.chocoName }}
+  inputs:
+    command: install
+    extraArguments: '--failonstderr'
+    verbose: true
+    installPackageId: ${{ parameters.chocoName }}
+    installPackageVersion: ${{ parameters.version }}
+    installPre: true
+    installSource: ${{ parameters.chocoFeed }}
+  env:
+    SYSTEM_ACCESSTOKEN: $(system.accesstoken)

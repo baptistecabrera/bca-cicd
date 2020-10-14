@@ -1,0 +1,227 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  type: string
+- name: nugetName
+  type: string
+- name: nugetFeed
+  type: string
+- name: nugetPush
+  type: boolean
+  default: true
+- name: chocoName
+  type: string
+- name: chocoFeed
+  type: string
+- name: chocoPush
+  type: boolean
+  default: true
+- name: testWindows
+  type: boolean
+  default: true
+- name: testLinux
+  type: boolean
+  default: true
+- name: testMacOs
+  type: boolean
+  default: true
+
+stages: 
+- stage: Initialization
+  displayName: Build Initialization
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVm]'
+  jobs:
+  - job: Initialization
+    displayName: Initialize Build
+    steps:
+    - template: steps/ps/getVersion.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        sourceDirectory: '${{ parameters.sourceDirectory }}'
+    - ${{ if eq(parameters.nugetPush, true) }}:
+      - template: steps/common/testPackage.yml
+        parameters:
+          name: ${{ parameters.nugetName }}
+          version: $(getVersion.packageVersion)
+          type: nuget
+          feed: /${{ parameters.nugetFeed }}
+          failOnExists: true
+          stepReference: Nuget
+    - ${{ if eq(parameters.chocoPush, true) }}:
+      - template: steps/common/testPackage.yml
+        parameters:
+          name: ${{ parameters.chocoName }}
+          version: $(getVersion.packageVersion)
+          type: nuget
+          feed: /${{ parameters.chocoFeed }}
+          failOnExists: true
+          stepReference: Choco
+    - powershell: Write-Host "##vso[build.updatebuildnumber]$(getVersion.packageVersion)-$(Build.BuildNumber)"
+      displayName: Set Build Number
+- stage: Test
+  displayName: Test ${{ parameters.psType }}
+  dependsOn: Initialization
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.packageVersion'] ]
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  jobs:
+  - job: TestWindows
+    displayName: Test ${{ parameters.psType }} on Windows
+    condition: eq('${{ parameters.testWindows }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+    steps:
+    - template: steps/ps/test.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        sourceDirectory: ${{ parameters.sourceDirectory }}
+        skipAnalyzer: false
+  - job: TestLinux
+    displayName: Test ${{ parameters.psType }} on Linux
+    condition: eq('${{ parameters.testLinux }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolLinuxVm]'
+    steps:
+    - template: steps/ps/test.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        sourceDirectory: ${{ parameters.sourceDirectory }}
+        skipAnalyzer: true
+  - job: TestMacOs
+    displayName: Test ${{ parameters.psType }} on MacOS
+    condition: eq('${{ parameters.testMacOs }}', true)
+    pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolMacOsVm]'
+    steps:
+    - template: steps/ps/test.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        version: $(version)
+        sourceDirectory: ${{ parameters.sourceDirectory }}
+        skipAnalyzer: true
+- stage: Build
+  displayName: Build ${{ parameters.psType }}
+  dependsOn:
+    - Initialization
+    - Test
+  variables:
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  condition: |
+    and(
+      succeeded(),
+      ne(variables['Build.Reason'], 'PullRequest')
+    )
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVSVm]'
+  jobs:
+  - job: Build
+    displayName: Build ${{ parameters.psType }}
+    steps:
+    - template: steps/ps/build.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        nugetName: ${{ parameters.nugetName }}
+        chocoName: ${{ parameters.chocoName }}
+        sourceDirectory: ${{ parameters.sourceDirectory }}
+- stage: NuGetPackage
+  displayName: Package ${{ parameters.psType }} for NuGet
+  dependsOn:
+    - Initialization
+    - Build
+  variables:
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVm]'
+  condition: |
+    and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        eq(variables['Build.SourceBranchName'], 'master')
+    )
+#  condition: |
+#    and(
+#      succeeded(),
+#      ne(variables['Build.Reason'], 'PullRequest'),
+#      or(
+#        in(variables['Build.SourceBranchName'], 'master', develop),
+#        startsWith(variables['Build.SourceBranch'], 'refs/heads/release'),  
+#      )
+#    )
+
+#  condition: |
+#    and(
+#        succeeded(),
+#        ne(variables['Build.Reason'], 'PullRequest'),
+#        or(
+#          eq(variables['Build.SourceBranchName'], 'master'),
+#          and(
+#            eq(variables['Build.SourceBranchName'], 'develop'),
+#            eq(stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'], true)
+#          ),
+#          and(
+#            startsWith(variables['Build.SourceBranch'], 'refs/heads/release'),
+#            eq(stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'], true)
+#          )
+#        )
+#    )
+  jobs:
+  - job: NuGetPack
+    displayName: Package NuGet
+    steps:
+    - checkout: none
+    - template: steps/ps/packNuget.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        nugetName: ${{ parameters.nugetName }}
+        nugetFeed: ${{ parameters.nugetFeed }}
+        nugetPush: ${{ parameters.nugetPush }}
+- stage: ChocoPackage
+  displayName: Package ${{ parameters.psType }} for Chocolatey
+  dependsOn:
+    - Initialization
+    - Build
+  variables:
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  pool:
+      name: '$[variables.buildPoolName]'
+      vmImage: '$[variables.buildPoolWindowsVm]'
+  condition: |
+    and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        eq(variables['Build.SourceBranchName'], 'master')
+    )
+  jobs:
+  - job: ChocoPack
+    displayName: Package Chocolatey
+    steps:
+    - checkout: none
+    - template: steps/ps/packChoco.yml
+      parameters:
+        psName: ${{ parameters.psName }}
+        psType: ${{ parameters.psType }}
+        chocoName: ${{ parameters.chocoName }}
+        chocoFeed: ${{ parameters.chocoFeed }}
+        chocoPush: ${{ parameters.chocoPush }}

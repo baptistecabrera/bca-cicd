@@ -1,0 +1,43 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  type: string
+- name: installDependencies
+  type: boolean
+  default: true
+
+steps:
+- powershell: |
+    Write-Host "Installing ${{ parameters.psType }} dependencies..."
+    switch ('${{ parameters.psType }}')
+    {
+      'Module'
+      {
+        (Import-PowerShellDataFile ./${{ parameters.psName }}.psd1).RequiredModules | Where-Object { $_ } | ForEach-Object {
+            Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+            Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+        }
+      }
+      'Script'
+      {
+        $ScriptFileInfo = Test-ScriptFileInfo ./${{ parameters.psName }}.ps1
+        $ScriptFileInfo.RequiredModules | Where-Object { $_ } | ForEach-Object {
+            Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+            Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+        }
+        $ScriptFileInfo.RequiredScripts | Where-Object { $_ } | ForEach-Object {
+            Write-Host " - Installing script '$($_)'."
+            Find-Script -Name $_ -AllowPrerelease | Install-Script -Scope CurrentUser -Force
+        }
+      }
+    }
+  workingDirectory: '${{ parameters.sourceDirectory }}'
+  displayName: 'Install ${{ parameters.psType }} Dependencies'
+  condition: eq('${{ parameters.installDependencies }}', true)

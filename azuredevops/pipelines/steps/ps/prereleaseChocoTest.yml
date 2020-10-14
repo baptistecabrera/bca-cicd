@@ -1,0 +1,41 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: version
+  type: string
+- name: chocoName
+  type: string
+- name: chocoFeed
+  type: string
+- name: skipPester
+  type: boolean
+  default: false
+
+steps:
+- checkout: none
+- template: installFromChocoFeed.yml
+  parameters:
+    chocoName: ${{ parameters.chocoName }}
+    chocoFeed: ${{ parameters.chocoFeed }}
+    version: $(version)
+- template: getBasePath.yml
+  parameters:
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    version: ${{ parameters.version }}
+- template: test.yml
+  parameters:
+    testName: Chocolatey
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    version: ${{ parameters.version }}
+    sourceDirectory: $(getBasePath.basePath)
+    installDependencies: false
+    skipPester: ${{ parameters.skipPester }}
+    skipAnalyzer: true

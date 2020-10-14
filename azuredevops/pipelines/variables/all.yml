@@ -1,0 +1,7 @@
+variables:
+- group: Secrets
+- template: pool.yml
+- template: choco.yml
+- template: nuget.yml
+- template: github.yml
+- template: icon.yml

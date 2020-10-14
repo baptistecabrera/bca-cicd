@@ -1,0 +1,37 @@
+parameters:
+- name: name
+  type: string
+- name: version
+  type: string
+- name: type
+  type: string
+- name: feed
+  type: string
+- name: failOnExists
+  type: boolean
+  default: false
+- name: stepReference
+  type: string
+  default: ''
+
+steps:
+- task: DownloadPackage@1
+  displayName: Download '${{ parameters.name }}'
+  inputs:
+    packageType: ${{ parameters.type }}
+    feed: ${{ parameters.feed }}
+    definition: ${{ parameters.name }}
+    version: ${{ parameters.version }}
+    extract: false
+    downloadPath: $(Pipeline.Workspace)
+- powershell : |
+    $Exists = $false
+    if ((Test-Path (Join-Path "$(Pipeline.Workspace)" "${{ parameters.name }}.nupkg")))
+    {
+        $Exists = $true
+        if ("${{ parameters.failOnExists }}" -eq $true) { Write-Error -Message "Package '${{ parameters.name }}' with version ${{ parameters.version }} already exists." -Category ResourceExists -CategoryActivity "Test-Package" -TargetType "nuget" -TargetName "${{ parameters.name }}" -Exception ResourceExistsException }
+    }
+    Write-Host "Package '${{ parameters.name }}' with version ${{ parameters.version }} exists = $Exists"
+    Write-Host "##vso[task.setvariable variable=packageExists;isOutput=true]$($Exists)"
+  name: testPackage${{ parameters.stepReference }}
+  displayName: Check '${{ parameters.name }}'

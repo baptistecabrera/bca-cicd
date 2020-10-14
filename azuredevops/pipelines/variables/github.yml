@@ -1,0 +1,19 @@
+variables:
+- name: gitHubOrganization
+  value: baptistecabrera
+- name: gitHubRepoUrl
+  value: 'https://$(gitHubRepoPat)@github.com/$(gitHubOrganization)/$(Build.Repository.Name).git'
+- name: gitHubNugetFeedCredentials
+  value: 'GitHub-BaptisteCabrera'
+- name: gitHubProjectUrl
+  value: 'https://github.com/$(gitHubOrganization)/$(Build.Repository.Name)'
+- name: gitHubRepositorytUrl
+  value: '$(gitHubProjectUrl).git'
+- name: gitHubLicenseUrl
+  value: '$(gitHubProjectUrl)/blob/master/LICENSE'
+- name: gitHubSourceUrl
+  value: '$(gitHubProjectUrl)/tree/master/src'
+- name: gitHubDocUrl
+  value: '$(gitHubProjectUrl)/tree/master/doc'
+- name: gitHubIssueUrl
+  value: '$(gitHubProjectUrl)/issues'

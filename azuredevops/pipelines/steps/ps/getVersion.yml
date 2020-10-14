@@ -1,0 +1,36 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  type: string
+
+steps:
+- powershell: |
+    $Prerelease = $false
+    switch ('${{ parameters.psType }}')
+    {
+      'Module'
+      {
+        $PSData = Import-PowerShellDataFile ./${{ parameters.psName }}.psd1
+        $Version = "{0}{1}" -f $PSData.ModuleVersion.ToString(), $PSData.PrivateData.PSData.Prerelease
+        if ($PSData.PrivateData.PSData.Prerelease) { $Prerelease = $true }
+      }
+      'Script'
+      {
+        $Version = (Test-ScriptFileInfo ./${{ parameters.psName }}.ps1).Version.ToString()
+        if ($Version.Split("-")[1]) { $Prerelease = $true }
+      }
+    }
+    Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is $Version"
+    Write-Host "##vso[task.setvariable variable=packageVersion;isOutput=true]$($Version)"
+    Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is prerelease = $Prerelease"
+    Write-Host "##vso[task.setvariable variable=isPrerelease;isOutput=true]$($Prerelease)"
+  name: getVersion
+  workingDirectory: ${{ parameters.sourceDirectory }}
+  displayName: 'Get ${{ parameters.psType }} Version'

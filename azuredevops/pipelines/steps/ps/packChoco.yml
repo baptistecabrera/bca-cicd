@@ -1,0 +1,66 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: chocoName
+  type: string
+- name: chocoFeed
+  type: string
+- name: chocoPush
+  type: boolean
+  default: true
+    
+steps:
+- task: DownloadPipelineArtifact@2
+  displayName: 'Download Pipeline Artifact'
+  inputs:
+    artifact: '$(Build.DefinitionName)-$(Build.BuildNumber)'
+    path: '$(Pipeline.Workspace)/choco/tools/${{ parameters.psName }}'
+- powershell: |
+    Move-Item -Path (Join-Path "$(Pipeline.Workspace)/choco/tools/${{ parameters.psName }}" ${{ parameters.chocoName }}.nuspec) -Destination (Join-Path $(Pipeline.Workspace) "choco")
+    Move-Item -Path (Join-Path "$(Pipeline.Workspace)/choco/tools/${{ parameters.psName }}" "LICENSE*") -Destination (Join-Path (Join-Path $(Pipeline.Workspace) "choco/tools") "LICENSE.txt") -Force
+  displayName: 'Move Package Files'
+- checkout: build-tools
+- task: CopyFiles@2
+  displayName: 'Copy Chocolatey Scripts'
+  inputs:
+    SourceFolder: '$(Build.Repository.LocalPath)/build-tools/chocolatey/ps/${{ parameters.psType }}'
+    Contents: |
+      chocolatey*.ps1
+      VERIFICATION.txt
+    TargetFolder: '$(Pipeline.Workspace)/choco/tools'
+    OverWrite: true
+- powershell: 'Get-ChildItem -Path "$(Pipeline.Workspace)" -Recurse'
+  displayName: 'List Package Content'
+- task: ChocolateyCommand@0
+  displayName: "Chocolatey Pack"
+  inputs:
+    command: 'pack'
+    packOperation: 'single'
+    packWorkingDirectory: '$(Pipeline.Workspace)/choco'
+    packNuspecFileName: '${{ parameters.chocoName }}.nuspec'
+    packOutputDirectory: '$(Pipeline.Workspace)/choco'
+- powershell: 'Get-ChildItem -Path "$(Pipeline.Workspace)/choco" -Recurse'
+  displayName: 'List Package Content'
+- task: NuGetCommand@2
+  displayName: 'Push Choco Package'
+  inputs:
+    command: push
+    packagesToPush: '$(Pipeline.Workspace)/choco/${{ parameters.chocoName }}*.nupkg'
+    publishVstsFeed: '${{ parameters.chocoFeed }}'
+  condition: |
+    and(
+        succeeded(),
+        eq(variables['Build.SourceBranchName'], 'master'),
+        or(
+            eq(${{ parameters.chocoPush }}, true),
+            eq(variables['Build.Reason'], 'IndividualCI')
+        )
+    )
+  env:
+    SYSTEM_ACCESSTOKEN: $(system.accesstoken)

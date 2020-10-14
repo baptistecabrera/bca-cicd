@@ -1,0 +1,335 @@
+parameters:
+# Source parameters
+- name: psName
+  displayName: PowerShell Name
+  type: string
+  default: 'MyPowerShell'
+- name: psType
+  type: string
+  displayName: PowerShell Type
+  default: 'Module'
+  values:
+    - Module
+    - Script
+
+# NuGet Package parameters
+- name: nugetName
+  displayName: NuGet Package Name
+  type: string
+  default: 'MyPowerShell'
+- name: nugetFeed
+  displayName: NuGet Feed Name
+  type: string
+  default: 'MyFeed'
+- name: nugetFeedUrl
+  displayName: NuGet Feed URL
+  type: string
+  default: https://pkgs.dev.azure.com/organization/_packaging/feed/nuget/v2
+- name: psGalPub
+  displayName: Publish to PS Gallery
+  type: boolean
+  default: true
+
+# Tests parameters
+- name: testWindows
+  displayName: Test on Windows
+  type: boolean
+  default: true
+- name: testLinux
+  displayName: Test on Linux
+  type: boolean
+  default: true
+- name: testMacOs
+  displayName: Test on MacOS
+  type: boolean
+  default: true
+- name: includeTags
+  displayName: Test Tags to Include (comma separated)
+  type: string
+  default: ' '
+- name: excludeTags
+  displayName: Test Tags to Exclude (comma separated)
+  type: string
+  default: ' '
+- name: coveragePath
+  displayName: Code Coverage Path (relative to Source Directory)
+  type: string
+  default: 'Public/*'
+
+# Variable group Secrets contains 'psGalleryApiKey' used when publishing to PS Gallery,
+# but you can create the secret variable at the pipeline level, and remove the inclusion of the group.
+variables:
+- group: MySecretVariableGroup
+- name: psGalApiKey
+  value: $(MyPSGalleryApiKey)
+- name: poolName
+  value: 'Azure Pipelines'
+- name: vmImageWindows
+  value: 'windows-latest'
+- name: vmImageLinux
+  value: 'ubuntu-latest'
+- name: vmImageMacOS
+  value: 'macOS-latest'
+
+trigger:
+- none
+
+# Fill in the build pipeline path in 'source'
+resources:
+  pipelines:
+  - pipeline: Build
+    source: path\to\build-piepeline
+    trigger: 
+      branches:
+      - master
+
+# Initialization stage will retrieve the version
+stages: 
+- stage: Initialization
+  displayName: Release Initialization
+  jobs:
+  - deployment: Initialization
+    displayName: Initialize Release
+    environment: Initialization
+    pool:
+      name: ${{ variables.poolName }}
+      vmImage: ${{ variables.vmImageWindows }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - powershell: |
+              $Prerelease = $false
+              switch ('${{ parameters.psType }}')
+              {
+                'Module'
+                {
+                    $PSData = Import-PowerShellDataFile ./${{ parameters.psName }}.psd1
+                    $Version = "{0}{1}" -f $PSData.ModuleVersion.ToString(), $PSData.PrivateData.PSData.Prerelease
+                    if ($PSData.PrivateData.PSData.Prerelease) { $Prerelease = $true }
+                }
+                'Script'
+                {
+                    $Version = (Test-ScriptFileInfo ./${{ parameters.psName }}.ps1).Version.ToString()
+                    if ($Version.Split("-")[1]) { $Prerelease = $true }
+                }
+              }
+              Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is $Version"
+              Write-Host "##vso[task.setvariable variable=packageVersion;isOutput=true]$($Version)"
+              Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is prerelease = $Prerelease"
+              Write-Host "##vso[task.setvariable variable=isPrerelease;isOutput=true]$($Prerelease)"
+            name: getVersion
+            workingDirectory: $(Pipeline.Workspace)/Build/$(resources.pipeline.Build.runName)
+            displayName: 'Get ${{ parameters.psType }} Version'
+          - powershell: Write-Host "##vso[build.updatebuildnumber]${{ parameters.psName }}-$(getVersion.packageVersion)-$(Build.BuildNumber)"
+            displayName: Set Release Number
+
+# Test stage will run Pester tests and code coverage
+- stage: Test
+  displayName: Test ${{ parameters.psType }}
+  dependsOn: Initialization
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.isPrerelease'] ]
+  jobs:
+  - job: Test
+    displayName: Test on
+    strategy:
+      matrix:
+        Windows:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageWindows }}
+        Linux:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageLinux }}
+        MacOS:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageMacOS }}
+    pool:
+      name: $(poolName)
+      vmImage: $(vmImage)
+    steps:
+    - checkout: none
+    - powershell: |
+        $SecurePassword = ConvertTo-SecureString "$env:SYSTEM_ACCESSTOKEN" -AsPlainText -Force
+        $Credential = New-Object System.Management.Automation.PSCredential ("${{ parameters.nugetFeed }}", $SecurePassword)
+        Register-PackageSource -ProviderName PowerShellGet -Name ${{ parameters.nugetFeed }} -Location ${{ parameters.nugetFeedUrl }} -ScriptSourceLocation ${{ parameters.nugetFeedUrl }} -Trusted -Credential $Credential
+
+        Write-Host "Installing ${{ parameters.psType }} ${{ parameters.psName }} $(version) from ${{ parameters.nugetFeed }}"
+        Find-${{ parameters.psType }} -Name ${{ parameters.psName }} -RequiredVersion $(version) -AllowPrerelease -Repository ${{ parameters.nugetFeed }} -Credential $Credential | Install-Module -Repository ${{ parameters.nugetFeed }} -Credential $Credential  -Force
+        Unregister-PackageSource -Source ${{ parameters.nugetFeed }} -Force
+      displayName: Install ${{ parameters.psType }} from ${{ parameters.nugetFeed }}
+      env:
+        SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - powershell: |
+        switch ('${{ parameters.psType }}')
+        {
+            'Module'
+            {
+                Import-Module -Name ${{ parameters.psName }} -RequiredVersion $(version)
+                $Module = Get-Module ${{ parameters.psName }}
+                $Path = $Module.ModuleBase
+            }
+            'Script'
+            {
+                if ($env:ProgramFiles)
+                {
+                    if ($PSVersionTable.PSVersion.Major -ge 6) { $ScriptPath = Join-Path $env:ProgramFiles "PowerShell/Scripts/" }
+                    else { $ScriptPath = Join-Path $env:ProgramFiles "WindowsPowerShell/Scripts/" }
+                }
+                if ($ScriptPath -and (Test-Path (Join-Path $ScriptPath "${{ parameters.psName }}.ps1"))) { $Path = $ScriptPath }
+                else
+                {
+                    $Script = Get-InstalledScript -Name ${{ parameters.psName }} -RequiredVersion $(version)
+                    $Path = $Script.InstalledLocation
+                }
+            }
+        }
+        Write-Host "${{ parameters.psType }} base path is $Path"
+        Write-Host "##vso[task.setvariable variable=basePath;isOutput=true]$($Path)"
+      name: getBasePath
+      displayName: 'Get ${{ parameters.psType }} Path'
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - powershell: |
+        Find-Module Pester | Install-Module -Scope CurrentUser -Force
+        
+        $IncludeTags = "${{ parameters.includeTags }}" -split "[, ]" | Where-Object { $_ }
+        $ExcludeTags = "${{ parameters.excludeTags }}" -split "[, ]" | Where-Object { $_ }
+        $CodeCoverageResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Coverage.xml'
+        $TestResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Tests.xml'
+        $CodeCoverage = "./${{ parameters.coveragePath }}"
+
+        $Pester = Invoke-Pester -Path ./ -CodeCoverage $CodeCoverage -CodeCoverageOutputFile $CodeCoverageResult -OutputFile $TestResult -OutputFormat NUnitXml -TagFilter $IncludeTags -ExcludeTagFilter $ExcludeTags -PassThru -Strict
+
+        $Pester.Tests | ForEach-Object {
+          switch ($_.Result)
+          {
+            "Passed" { $Status = "section" }
+            "Failed" { $Status = "error" }
+            default { $Status = "warning" }
+          }
+          Write-Host ("##[{0}] [{1}] {2} ({3})" -f $Status, $_.Result, ($_.Path -join ' > '), $_.Duration)
+        }
+      displayName: 'Run Pester Tests and Coverage'
+      workingDirectory: $(getBasePath.basePath)
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      inputs:
+        testResultsFormat: NUnit
+        testResultsFiles: '**/${{ parameters.psName }}.$(version).$(Agent.OS).Tests.xml'
+        searchFolder: $(Agent.TempDirectory)
+        mergeTestResults: true
+        failTaskOnFailedTests: true
+        testRunTitle: 'Tests on $(Agent.OS) for ${{ parameters.psName }} ($(version))'
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish Code Coverage'
+      inputs:
+        codeCoverageTool: 'JaCoCo'
+        summaryFileLocation: '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Coverage.xml'
+        reportDirectory: '$(Agent.TempDirectory)/$(Agent.OS)'
+        pathToSources: "$(getBasePath.basePath)/${{ parameters.coveragePath }}/"
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+
+# Publish stage will publish to PowerShell
+- stage: Publish
+  displayName: Publish ${{ parameters.psType }}
+  pool:
+      name: ${{ variables.poolName }}
+      vmImage: ${{ variables.vmImageWindows }}
+  dependsOn:
+    - Initialization
+    - Test
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['Initialization.getVersion.packageVersion'] ]
+  jobs:
+  - job: PSGalleryPublish
+    displayName: Publish ${{ parameters.psType }} to PS Gallery
+    condition: eq('${{ parameters.psGalPub }}', true)
+    steps:
+    - checkout: none
+    - powershell: |
+        $SecurePassword = ConvertTo-SecureString "$env:SYSTEM_ACCESSTOKEN" -AsPlainText -Force
+        $Credential = New-Object System.Management.Automation.PSCredential ("${{ parameters.nugetFeed }}", $SecurePassword)
+        Register-PackageSource -ProviderName PowerShellGet -Name ${{ parameters.nugetFeed }} -Location ${{ parameters.nugetFeedUrl }} -ScriptSourceLocation ${{ parameters.nugetFeedUrl }} -Trusted -Credential $Credential
+
+        Write-Host "Installing ${{ parameters.psType }} ${{ parameters.psName }} $(version) from ${{ parameters.nugetFeed }}"
+        Find-${{ parameters.psType }} -Name ${{ parameters.psName }} -RequiredVersion $(version) -AllowPrerelease -Repository ${{ parameters.nugetFeed }} -Credential $Credential | Install-Module -Repository ${{ parameters.nugetFeed }} -Credential $Credential  -Force
+        Unregister-PackageSource -Source ${{ parameters.nugetFeed }} -Force
+      displayName: Install ${{ parameters.psType }} from ${{ parameters.nugetFeed }}
+      env:
+        SYSTEM_ACCESSTOKEN: $(system.accesstoken)
+    - ${{ if eq(parameters.psType, 'Script') }}:
+      - powershell: |
+            if ($env:ProgramFiles)
+            {
+                if ($PSVersionTable.PSVersion.Major -ge 6) { $ScriptPath = Join-Path $env:ProgramFiles "PowerShell/Scripts/" }
+                else { $ScriptPath = Join-Path $env:ProgramFiles "WindowsPowerShell/Scripts/" }
+            }
+            if ($ScriptPath -and (Test-Path (Join-Path $ScriptPath "${{ parameters.psName }}.ps1"))) { $Path = $ScriptPath }
+            else
+            {
+                $Script = Get-InstalledScript -Name ${{ parameters.psName }} -RequiredVersion $(version)
+                $Path = $Script.InstalledLocation
+            }
+                
+            Write-Host "${{ parameters.psType }} base path is $Path"
+            Write-Host "##vso[task.setvariable variable=basePath;isOutput=true]$($Path)"
+        name: getBasePath
+        displayName: 'Get ${{ parameters.psType }} Path'
+    - powershell: |
+        switch ('${{ parameters.psType }}')
+        {
+          "Module" { Publish-Module -Name ${{ parameters.psName }} -NuGetApiKey $env:PSGAL_API_KEY }
+          "Script" { Publish-Script -Path (Join-Path '$(getBasePath.basePath)' '${{ parameters.psName }}.ps1') -NuGetApiKey $env:PSGAL_API_KEY }
+        }
+      displayName: 'Publish ${{ parameters.psType }} to PowerShell Gallery'
+      condition: |
+        and(
+            succeeded(),
+            eq(${{ parameters.psGalPub }}, true)
+        )
+      env:
+        PSGAL_API_KEY: $(psGalApiKey)

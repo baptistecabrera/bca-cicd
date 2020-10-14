@@ -1,0 +1,21 @@
+parameters:
+- name: syncGitHub
+  type: boolean
+  default: true
+
+stages:
+- stage: GitHub
+  displayName: Mirror to GitHub
+  pool:
+    name: '$[variables.buildPoolName]'
+    vmImage: '$[variables.buildPoolWindowsVSVm]'
+  jobs:
+  - job: GitHub
+    displayName: Mirror to GitHub
+    steps:
+    - task: gitmirror@0
+      displayName: "Mirror Repository to GitHub"
+      inputs:
+        GitRepoUrl: '$(gitHubRepoUrl)'
+      env:
+        SYSTEM_ACCESSTOKEN: $(system.accesstoken)

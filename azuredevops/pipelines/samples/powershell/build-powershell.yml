@@ -1,0 +1,436 @@
+parameters:
+# Source parameters
+- name: psName
+  displayName: PowerShell Name
+  type: string
+  default: 'MyPowerShell'
+- name: psType
+  type: string
+  displayName: PowerShell Type
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  displayName: Source Directory
+  type: string
+  default: $(Build.Repository.LocalPath)/src/MyModule
+
+# NuGet Package parameters
+- name: nugetName
+  displayName: NuGet Package Name
+  type: string
+  default: 'MyPowerShell'
+- name: nugetFeed
+  displayName: NuGet Feed Name
+  type: string
+  default: 'MyFeed'
+- name: nugetPush
+  displayName: Push NuGet Package
+  type: boolean
+  default: true
+
+# Tests parameters
+- name: runAnalyzer
+  displayName: Run PSScriptAnalyzer
+  type: boolean
+  default: true
+- name: analyzerSeverity
+  displayName: PSScriptAnalyzer Severity
+  type: string
+  default: 'Error'
+  values:
+    - Information
+    - Warning
+    - Error
+- name: testWindows
+  displayName: Test on Windows
+  type: boolean
+  default: true
+- name: testLinux
+  displayName: Test on Linux
+  type: boolean
+  default: true
+- name: testMacOs
+  displayName: Test on MacOS
+  type: boolean
+  default: true
+- name: includeTags
+  displayName: Test Tags to Include (comma separated)
+  type: string
+  default: ' '
+- name: excludeTags
+  displayName: Test Tags to Exclude (comma separated)
+  type: string
+  default: ' '
+- name: coveragePath
+  displayName: Code Coverage Path (relative to Source Directory)
+  type: string
+  default: 'Public/*'
+
+trigger:
+  branches:
+    include:
+    - develop
+    - master
+  paths:
+    exclude:
+    - .azuredevops/**
+    - .github/**
+
+variables:
+- name: poolName
+  value: 'Azure Pipelines'
+- name: vmImageWindows
+  value: 'windows-latest'
+- name: vmImageLinux
+  value: 'ubuntu-latest'
+- name: vmImageMacOS
+  value: 'macOS-latest'
+
+# Initialization stage will retrieve the version and check if packages already exist for this version
+stages: 
+- stage: Initialization
+  displayName: Build Initialization
+  pool:
+    name: ${{ variables.poolName }}
+    vmImage: ${{ variables.vmImageWindows }}
+  jobs:
+  - job: Initialization
+    displayName: Initialize Build
+    steps:
+    - powershell: |
+        $Prerelease = $false
+        switch ('${{ parameters.psType }}')
+        {
+          'Module'
+          {
+            $PSData = Import-PowerShellDataFile ./${{ parameters.psName }}.psd1
+            $Version = "{0}{1}" -f $PSData.ModuleVersion.ToString(), $PSData.PrivateData.PSData.Prerelease
+            if ($PSData.PrivateData.PSData.Prerelease) { $Prerelease = $true }
+          }
+          'Script'
+          {
+            $Version = (Test-ScriptFileInfo ./${{ parameters.psName }}.ps1).Version.ToString()
+            if ($Version.Split("-")[1]) { $Prerelease = $true }
+          }
+        }
+        Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is $Version"
+        Write-Host "##vso[task.setvariable variable=packageVersion;isOutput=true]$($Version)"
+        Write-Host "${{ parameters.psType }} ${{ parameters.psName }} version is prerelease = $Prerelease"
+        Write-Host "##vso[task.setvariable variable=isPrerelease;isOutput=true]$($Prerelease)"
+      name: getVersion
+      workingDirectory: ${{ parameters.sourceDirectory }}
+      displayName: 'Get ${{ parameters.psType }} Version'
+    - ${{ if eq(parameters.nugetPush, true) }}:
+      - task: DownloadPackage@1
+        displayName: Download NuGet Package '${{ parameters.nugetName }}'
+        inputs:
+          packageType: nuget
+          feed: ${{ parameters.nugetFeed }}
+          definition: ${{ parameters.nugetName }}
+          version: $(getVersion.packageVersion)
+          extract: false
+          downloadPath: $(Pipeline.Workspace)
+      - powershell : |
+          if ((Test-Path (Join-Path "$(Pipeline.Workspace)" "${{ parameters.nugetName }}.nupkg")))
+          {
+              Write-Error -Message "Package '${{ parameters.nugetName }}' with version $(getVersion.packageVersion) already exists." -Category ResourceExists -CategoryActivity "Test-Package" -TargetType "nuget" -TargetName "${{ parameters.nugetName }}" -Exception ResourceExistsException
+          }
+        displayName: Check NuGet Package '${{ parameters.nugetName }}'
+    - powershell: Write-Host "##vso[build.updatebuildnumber]${{ parameters.psName }}-$(getVersion.packageVersion)-$(Build.BuildNumber)"
+      displayName: Set Build Number
+
+# Test stage will run Pester tests and code coverage
+- stage: Test
+  displayName: Test ${{ parameters.psType }}
+  dependsOn: Initialization
+  variables:
+    version: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.packageVersion'] ]
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  jobs:
+  - job: Test
+    displayName: Test on
+    strategy:
+      matrix:
+        Windows:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageWindows }}
+        Linux:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageLinux }}
+        MacOS:
+          poolName: ${{ variables.poolName }}
+          vmImage: ${{ variables.vmImageMacOS }}
+    pool:
+      name: $(poolName)
+      vmImage: $(vmImage)
+    steps:
+    - powershell: |
+        Find-Module PSScriptAnalyzer | Install-Module -Scope CurrentUser -Force
+        Invoke-ScriptAnalyzer -Path ./ -Settings PSGallery -Recurse -Severity ${{ parameters.analyzerSeverity }} -ReportSummary -EnableExit
+      displayName: 'Run PowerShell Script Analyzer'
+      workingDirectory: '${{ parameters.sourceDirectory }}'
+      condition: |
+        and(
+          succeeded(),
+          eq('${{ parameters.runAnalyzer }}', true),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - powershell: |
+        Write-Host "Installing ${{ parameters.psType }} dependencies..."
+        switch ('${{ parameters.psType }}')
+        {
+          'Module'
+          {
+            (Import-PowerShellDataFile ./${{ parameters.psName }}.psd1).RequiredModules | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+                Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+            }
+          }
+          'Script'
+          {
+            $ScriptFileInfo = Test-ScriptFileInfo ./${{ parameters.psName }}.ps1
+            $ScriptFileInfo.RequiredModules | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+                Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+            }
+            $ScriptFileInfo.RequiredScripts | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing script '$($_)'."
+                Find-Script -Name $_ -AllowPrerelease | Install-Script -Scope CurrentUser -Force
+            }
+          }
+        }
+      workingDirectory: '${{ parameters.sourceDirectory }}'
+      displayName: 'Install ${{ parameters.psType }} Dependencies'
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - powershell: |
+        Find-Module Pester | Install-Module -Scope CurrentUser -Force
+        
+        $IncludeTags = "${{ parameters.includeTags }}" -split "[, ]" | Where-Object { $_ }
+        $ExcludeTags = "${{ parameters.excludeTags }}" -split "[, ]" | Where-Object { $_ }
+        $CodeCoverageResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Coverage.xml'
+        $TestResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Tests.xml'
+        $CodeCoverage = "./${{ parameters.coveragePath }}"
+
+        $Pester = Invoke-Pester -Path ./ -CodeCoverage $CodeCoverage -CodeCoverageOutputFile $CodeCoverageResult -OutputFile $TestResult -OutputFormat NUnitXml -TagFilter $IncludeTags -ExcludeTagFilter $ExcludeTags -PassThru -Strict
+
+        $Pester.Tests | ForEach-Object {
+          switch ($_.Result)
+          {
+            "Passed" { $Status = "section" }
+            "Failed" { $Status = "error" }
+            default { $Status = "warning" }
+          }
+          Write-Host ("##[{0}] [{1}] {2} ({3})" -f $Status, $_.Result, ($_.Path -join ' > '), $_.Duration)
+        }
+      displayName: 'Run Pester Tests and Coverage'
+      workingDirectory: '${{ parameters.sourceDirectory }}'
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - task: PublishTestResults@2
+      displayName: 'Publish Test Results'
+      inputs:
+        testResultsFormat: NUnit
+        testResultsFiles: '**/${{ parameters.psName }}.$(version).$(Agent.OS).Tests.xml'
+        searchFolder: $(Agent.TempDirectory)
+        mergeTestResults: true
+        failTaskOnFailedTests: true
+        testRunTitle: 'Tests on $(Agent.OS) for ${{ parameters.psName }} ($(version))'
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish Code Coverage'
+      inputs:
+        codeCoverageTool: 'JaCoCo'
+        summaryFileLocation: '$(Agent.TempDirectory)/${{ parameters.psName }}.$(version).$(Agent.OS).Coverage.xml'
+        reportDirectory: '$(Agent.TempDirectory)/$(Agent.OS)'
+        pathToSources: "${{ parameters.sourceDirectory }}/${{ parameters.coveragePath }}"
+      condition: |
+        and(
+          succeeded(),
+          or(
+            and(eq(variables['Agent.OS'], 'Windows_NT'), eq('${{ parameters.testWindows }}', true)),
+            and(eq(variables['Agent.OS'], 'Linux'), eq('${{ parameters.testLinux }}', true)),
+            and(eq(variables['Agent.OS'], 'Darwin'), eq('${{ parameters.testMacOS }}', true))
+          )
+        )
+
+# Build stage will build the PowerShell and prepare package artifacts
+- stage: Build
+  displayName: Build ${{ parameters.psType }}
+  dependsOn:
+    - Initialization
+    - Test
+  variables:
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  condition: |
+    and(
+      succeeded(),
+      ne(variables['Build.Reason'], 'PullRequest')
+    )
+  pool:
+    name: ${{ variables.poolName }}
+    vmImage: ${{ variables.vmImageWindows }}
+  jobs:
+  - job: Build
+    displayName: Build ${{ parameters.psType }}
+    steps:
+    - task: CopyFiles@2
+      displayName: 'Copy Sources to Staging'
+      inputs:
+        SourceFolder: '${{ parameters.sourceDirectory }}'
+        Contents: |
+          **
+          !**\.gitignore
+        TargetFolder: '$(Build.StagingDirectory)'
+        CleanTargetFolder: true
+        OverWrite: true
+    - powershell: |
+        Write-Host "Installing 'Bca.Nuget'..."
+        Find-Module -Name Bca.Nuget | Install-Module -Scope CurrentUser -Force
+      workingDirectory: '${{ parameters.sourceDirectory }}'
+      displayName: 'Install Bca.Nuget'
+    - powershell: |
+        Write-Host "Installing ${{ parameters.psType }} dependencies..."
+        switch ('${{ parameters.psType }}')
+        {
+          'Module'
+          {
+            (Import-PowerShellDataFile ./${{ parameters.psName }}.psd1).RequiredModules | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+                Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+            }
+          }
+          'Script'
+          {
+            $ScriptFileInfo = Test-ScriptFileInfo ./${{ parameters.psName }}.ps1
+            $ScriptFileInfo.RequiredModules | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing module '$($_.ModuleName)' with version '$($_.ModuleVersion)'."
+                Find-Module -Name $_.ModuleName -RequiredVersion $_.ModuleVersion -AllowPrerelease | Install-Module -Scope CurrentUser -Force
+            }
+            $ScriptFileInfo.RequiredScripts | Where-Object { $_ } | ForEach-Object {
+                Write-Host " - Installing script '$($_)'."
+                Find-Script -Name $_ -AllowPrerelease | Install-Script -Scope CurrentUser -Force
+            }
+          }
+        }
+      workingDirectory: '${{ parameters.sourceDirectory }}'
+      displayName: 'Install ${{ parameters.psType }} Dependencies'
+    - ${{ if eq(parameters.psType, 'Module') }}:    
+      - powershell: |
+          $ModulePath = "./${{ parameters.psName }}.psd1"
+          Import-Module $ModulePath
+          $Module = Get-Module ${{ parameters.psName }}
+          $Updates = @{
+            Path = $ModulePath;
+            FunctionsToExport = $Module.ExportedFunctions.Keys
+          }
+          if ($Module.ExportedCmdlets.Keys) { $Updates.Add("CmdletsToExport", $Module.ExportedCmdlets.Keys) }
+          if ($Module.ExportedAliases.Keys) { $Updates.Add("AliasesToExport", $Module.ExportedAliases.Keys) }
+          if ($Module.ExportedDscResources.Keys) { $Updates.Add("DscResourcesToExport", $Module.ExportedDscResources.Keys) }
+          Update-ModuleManifest @Updates
+            
+          Test-ModuleManifest -Path .\${{ parameters.psName }}.psd1 | Format-List *
+          Copy-Item -Path .\${{ parameters.psName }}.psd1 -Destination $(Build.StagingDirectory) -Force
+        workingDirectory: '${{ parameters.sourceDirectory }}'
+        displayName: 'Update Module Manifest'
+    - powershell: |
+        Import-Module -Name Bca.Nuget -Force
+        switch ('${{ parameters.psType }}')
+        {
+          'Module' { $PSData = Import-PowerShellDataFile ./${{ parameters.psName }}.psd1 }
+          'Script' { $PSData = Test-ScriptFileInfo ./${{ parameters.psName }}.ps1 }
+        }
+        Write-Host "Creating '$(Build.StagingDirectory)/${{ parameters.nugetName }}.nuspec'..."
+        $PSData | ConvertTo-NuspecManifest | Save-NuspecManifest -Path "$(Build.StagingDirectory)/${{ parameters.nugetName }}.nuspec"
+      workingDirectory: '$(Build.StagingDirectory)'
+      displayName: 'Create Nuspec Manifests'
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Pipeline Artifact'
+      inputs:
+        targetPath: '$(Build.StagingDirectory)'
+        artifact: $(Build.BuildNumber)
+      condition: |
+        and(
+          succeeded(),
+          ne(variables['Build.Reason'], 'PullRequest'),
+          eq(variables['Build.SourceBranchName'], 'master')
+        )
+
+# NuGet Package Stage will build the package and publish it
+- stage: NuGetPackage
+  displayName: Package ${{ parameters.psType }} for NuGet
+  dependsOn:
+    - Initialization
+    - Build
+  variables:
+    isPrerelease: $[ stageDependencies.Initialization.Initialization.outputs['getVersion.isPrerelease'] ]
+  pool:
+    name: ${{ variables.poolName }}
+    vmImage: ${{ variables.vmImageWindows }}
+  condition: |
+    and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        eq(variables['Build.SourceBranchName'], 'master')
+    )
+  jobs:
+  - job: NuGetPack
+    displayName: Package NuGet
+    steps:
+    - checkout: none
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download Pipeline Artifact'
+      inputs:
+        artifact: $(Build.BuildNumber)
+        path: '$(Pipeline.Workspace)'
+    - task: NuGetCommand@2
+      displayName: 'NuGet Pack'
+      inputs:
+        command: pack
+        packagesToPack: '$(Pipeline.Workspace)/${{ parameters.nugetName }}.nuspec'
+        packDestination: '$(Pipeline.Workspace)'
+    - task: NuGetCommand@2
+      displayName: 'Push NuGet Package'
+      inputs:
+        command: push
+        packagesToPush: '$(Pipeline.Workspace)/${{ parameters.nugetName }}*.nupkg'
+        publishVstsFeed: '${{ parameters.nugetFeed }}'
+      condition: |
+        and(
+            succeeded(),
+            eq(variables['Build.SourceBranchName'], 'master'),
+            or(
+                eq(${{ parameters.nugetPush }}, true),
+                eq(variables['Build.Reason'], 'IndividualCI')
+            )
+        )
+      env:
+        SYSTEM_ACCESSTOKEN: $(system.accesstoken)

@@ -1,20 +1,12 @@
-# Introduction 
-TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
+# Bca CI/CD
 
-# Getting Started
-TODO: Guide users through getting your code up and running on their own system. In this section you can talk about:
-1.	Installation process
-2.	Software dependencies
-3.	Latest releases
-4.	API references
+## Description
 
-# Build and Test
-TODO: Describe and show how to build your code and run the tests. 
+This repository is used to centralize common CI/CD tools (YAML pipelines templates, Chocolatey artifacts, PR templates, ...) for all my projects.
 
-# Contribute
-TODO: Explain how other users and developers can contribute to make your code better. 
+You can also find build and release pipelines that can be used out-of the box:
+- for PowerShell scripts or modules under [`azuredevops/pipelines/samples/powershell`](azuredevops/pipelines/samples/powershell/ReadMe.md)
 
-If you want to learn more about creating good readme files then refer the following [guidelines](https://docs.microsoft.com/en-us/azure/devops/repos/git/create-a-readme?view=azure-devops). You can also seek inspiration from the below readme files:
-- [ASP.NET Core](https://github.com/aspnet/Home)
-- [Visual Studio Code](https://github.com/Microsoft/vscode)
-- [Chakra Core](https://github.com/Microsoft/ChakraCore)
+## Disclaimer
+These tools have been created to answer my needs, but I provide them as-is to people who may need such tools.
+Feel free to copy and modify them according to your needs, but contributions are more than welcome.

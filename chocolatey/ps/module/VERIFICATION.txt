@@ -1,0 +1,7 @@
+VERIFICATION
+Verification is intended to assist the Chocolatey moderators and community in verifying that this package's contents are trustworthy.
+
+1. Download the source from GitHub (use "Software Source" link) or from the PowerShell Gallery;
+2. Use Get-FileHash -Path <FILE TO VERIFY> to get the file hash value from both the source file (from step 1 above) and the file from the package and compare them.
+
+Note: PowerShell module manifest file (.psd1) may have been updated during build process, and hash may not match.

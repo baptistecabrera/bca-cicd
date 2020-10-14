@@ -1,0 +1,67 @@
+parameters:
+- name: nugetPub
+  displayName: Publish NuGet Package
+  type: boolean
+  default: true
+- name: chocoPub
+  displayName: Publish Chocolatey Package
+  type: boolean
+  default: true
+- name: psGalPub
+  displayName: Publish to PS Gallery
+  type: boolean
+  default: true
+- name: gitHubPub
+  displayName: Publish to GitHub Packages
+  type: boolean
+  default: true
+- name: testWindows
+  displayName: Test on Windows
+  type: boolean
+  default: true
+- name: testLinux
+  displayName: Test on Linux
+  type: boolean
+  default: true
+- name: testMacOs
+  displayName: Test on MacOS
+  type: boolean
+  default: true
+
+trigger:
+- none
+
+# Fill in the build pipeline path in 'source'
+resources:
+  pipelines:
+  - pipeline: Build
+    source: Build\<buildName>
+    trigger: 
+      branches:
+      - master
+  repositories:
+    - repository: bca-cicd
+      type: git
+      name: bca-cicd
+      #ref: refs/tags/v1.0
+
+variables:
+- template: azuredevops/pipelines/variables/all.yml@bca-cicd
+
+# Specify the PowerShell item type (Module, Script) in 'psType' field
+stages: 
+- template: azuredevops/pipelines/pipeline-release-ps.yml@bca-cicd
+  parameters:
+    psName: $(resources.pipeline.Build.pipelineName)
+    artifactPath: $(Pipeline.Workspace)/Build/$(resources.pipeline.Build.pipelineName)-$(resources.pipeline.Build.runName)
+    psType: Module
+    nugetName: $(resources.pipeline.Build.pipelineName)
+    nugetFeed: ${{ variables.nugetFeedName }}
+    nugetPub: ${{ parameters.nugetPub }}
+    psGalPub: ${{ parameters.psGalPub }}
+    chocoName: $(Build.Repository.Name)
+    chocoFeed: ${{ variables.chocoFeedName }}
+    chocoPub: ${{ parameters.chocoPub }}
+    testWindows: ${{ parameters.testWindows }}
+    testLinux: ${{ parameters.testLinux }}
+    testMacOs: ${{ parameters.testMacOs }}

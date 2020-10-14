@@ -1,0 +1,163 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  type: string
+- name: nugetName
+  type: string
+- name: chocoName
+  type: string
+
+steps:
+- task: CopyFiles@2
+  displayName: 'Copy Sources to Staging'
+  inputs:
+    SourceFolder: '${{ parameters.sourceDirectory }}'
+    Contents: |
+      **
+      !**\.gitignore
+    TargetFolder: '$(Build.StagingDirectory)'
+    CleanTargetFolder: true
+    OverWrite: true
+- task: CopyFiles@2
+  displayName: 'Copy license to Staging'
+  inputs:
+    Contents: |
+      LICENSE*
+      !**\.gitignore
+    TargetFolder: '$(Build.StagingDirectory)'
+    CleanTargetFolder: false
+    OverWrite: true
+#- task: CopyFiles@2
+#  displayName: 'Copy Sources to Staging'
+#  inputs:
+#    SourceFolder: '$(Build.Repository.LocalPath)'
+#    Contents: |
+#      ${{ parameters.sourceDirectory }}/**
+#      LICENSE.md
+#      !**/.gitignore
+#    TargetFolder: '$(Build.StagingDirectory)'
+#    CleanTargetFolder: true
+#    OverWrite: true
+- powershell: |
+    Write-Host "Installing 'Bca.Nuget'..."
+    Find-Module -Name Bca.Nuget | Install-Module -Scope CurrentUser -Force
+  workingDirectory: '${{ parameters.sourceDirectory }}'
+  displayName: 'Install Bca.Nuget'
+- template: installDependencies.yml
+  parameters:
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    sourceDirectory: ${{ parameters.sourceDirectory }}
+- ${{ if eq(parameters.psType, 'Module') }}:    
+  - powershell: |
+      $ModulePath = "./${{ parameters.psName }}.psd1"
+      Import-Module $ModulePath
+      $Module = Get-Module ${{ parameters.psName }}
+      $Updates = @{
+        Path = $ModulePath;
+        FunctionsToExport = $Module.ExportedFunctions.Keys
+      }
+      if ($Module.ExportedCmdlets.Keys) { $Updates.Add("CmdletsToExport", $Module.ExportedCmdlets.Keys) }
+      if ($Module.ExportedAliases.Keys) { $Updates.Add("AliasesToExport", $Module.ExportedAliases.Keys) }
+      if ($Module.ExportedDscResources.Keys) { $Updates.Add("DscResourcesToExport", $Module.ExportedDscResources.Keys) }
+      Update-ModuleManifest @Updates
+        
+      Test-ModuleManifest -Path .\${{ parameters.psName }}.psd1 | Format-List *
+      Copy-Item -Path .\${{ parameters.psName }}.psd1 -Destination $(Build.StagingDirectory) -Force
+    workingDirectory: '${{ parameters.sourceDirectory }}'
+    displayName: 'Update Module Manifest'
+- powershell: |
+    Import-Module -Name Bca.Nuget -Force
+    switch ('${{ parameters.psType }}')
+    {
+      'Module' { $PSData = Import-PowerShellDataFile ./${{ parameters.psName }}.psd1 }
+      'Script' { $PSData = Test-ScriptFileInfo ./${{ parameters.psName }}.ps1 }
+    }
+    Write-Host "Creating '$(Build.StagingDirectory)/${{ parameters.nugetName }}.nuspec'..."
+    $Nuspec = $PSData | ConvertTo-NuspecManifest 
+    if (!(Get-NuspecProperty -Name projectUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name projectUrl -Value '$(gitHubProjectUrl)' -Nuspec $Nuspec | Out-Null }
+    if (!(Get-NuspecProperty -Name licenseUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name licenseUrl -Value '$(gitHubLicenseUrl)' -Nuspec $Nuspec | Out-Null }
+    if (!(Get-NuspecProperty -Name repository -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Resolve-NuspecRepository -Uri '$(gitHubRepositorytUrl)' | Set-NuspecRepository -Nuspec $Nuspec | Out-Null }
+    if ('${{ parameters.psType }}' -eq 'Script') { Set-NuspecProperty -Name license -Value 'MIT' -Nuspec $Nuspec | Out-Null }
+    $Nuspec | Save-NuspecManifest -Path "$(Build.StagingDirectory)/${{ parameters.nugetName }}.nuspec"
+    Write-Host $Nuspec.OuterXml
+
+    Write-Host "Creating '$(Build.StagingDirectory)/${{ parameters.chocoName }}.nuspec'..."
+    $Nuspec = $PSData | ConvertTo-NuspecManifest -AcceptChocolateyProperties
+    Set-NuspecProperty -Name id -Value ${{ parameters.chocoName }} -Nuspec $Nuspec | Out-Null
+    if (!(Get-NuspecProperty -Name projectUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name projectUrl -Value '$(gitHubProjectUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name licenseUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name licenseUrl -Value '$(gitHubLicenseUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name docsUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name docsUrl -Value '$(gitHubDocUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name mailingListUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name mailingListUrl -Value '$(gitHubIssueUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name bugTrackerUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name bugTrackerUrl -Value '$(gitHubIssueUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name packageSourceUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name packageSourceUrl -Value '$(gitHubSourceUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name projectSourceUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name projectSourceUrl -Value '$(gitHubSourceUrl)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    if (!(Get-NuspecProperty -Name iconUrl -Nuspec $Nuspec) -or ('${{ parameters.psType }}' -eq 'Script')) { Set-NuspecProperty -Name iconUrl -Value '$(psIcon)' -Nuspec $Nuspec -AcceptChocolateyProperties | Out-Null }
+    $Dependencies = Get-NuspecProperty -Name dependencies -Nuspec $Nuspec
+    $Dependencies.Value | Where-Object { $_.id -like "Bca.*"  } | ForEach-Object { $Dependency = $_; $Nuspec.package.metadata.dependencies.dependency | Where-Object { $_.id -eq $Dependency.id } | ForEach-Object { $_.id = $Dependency.id.Replace("Bca.", "bca-").ToLower() } }
+    Write-Host $Nuspec.OuterXml
+    $Nuspec | Save-NuspecManifest -Path "$(Build.StagingDirectory)/${{ parameters.chocoName }}.nuspec"
+  workingDirectory: '$(Build.StagingDirectory)'
+  displayName: 'Create Nuspec Manifests'
+- powershell: 'Get-ChildItem -Path $(Build.StagingDirectory) -Recurse'
+  displayName: 'List Artifacts Content'
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish Pipeline Artifact'
+  inputs:
+    targetPath: '$(Build.StagingDirectory)'
+    artifact: '$(Build.DefinitionName)-$(Build.BuildNumber)'
+  condition: |
+    and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        or(
+          eq(variables['Build.SourceBranchName'], 'master'),
+          and(
+            eq(variables['Build.SourceBranchName'], 'develop'),
+            eq(variables['isPrerelease'], true)
+          ),
+          and(
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/release'),
+            eq(variables['isPrerelease'], true)
+          )
+        )
+    )
+#    and(
+#        succeeded(),
+#        ne(variables['Build.Reason'], 'PullRequest'),
+#        eq(variables['Build.SourceBranchName'], 'master')
+#    )
+- task: gitmirror@0
+  displayName: "Mirror Repository to GitHub"
+  inputs:
+    GitRepoUrl: '$(gitHubRepoUrl)'
+  condition: |
+    and(
+        succeeded(),
+        ne(variables['Build.Reason'], 'PullRequest'),
+        or(
+          eq(variables['Build.SourceBranchName'], 'master'),
+          and(
+            eq(variables['Build.SourceBranchName'], 'develop'),
+            eq(variables['isPrerelease'], true)
+          ),
+          and(
+            startsWith(variables['Build.SourceBranch'], 'refs/heads/release'),
+            eq(variables['isPrerelease'], true)
+          )
+        )
+    )
+#    and(
+#        succeeded(),
+#        ne(variables['Build.Reason'], 'PullRequest'),
+#        in(variables['Build.SourceBranchName'], 'master', 'develop')
+#    )
+  env:
+    SYSTEM_ACCESSTOKEN: $(system.accesstoken)

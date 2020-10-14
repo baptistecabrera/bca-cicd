@@ -1,0 +1,41 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: version
+  type: string
+
+steps:
+- powershell: |
+    switch ('${{ parameters.psType }}')
+    {
+      'Module'
+      {
+        Import-Module -Name ${{ parameters.psName }} -RequiredVersion ${{ parameters.version }}
+        $Module = Get-Module ${{ parameters.psName }}
+        $Path = $Module.ModuleBase
+      }
+      'Script'
+      {
+        if ($env:ProgramFiles)
+        {
+          if ($PSVersionTable.PSVersion.Major -ge 6) { $ScriptPath = Join-Path $env:ProgramFiles "PowerShell/Scripts/" }
+          else { $ScriptPath = Join-Path $env:ProgramFiles "WindowsPowerShell/Scripts/" }
+        }
+        if ($ScriptPath -and (Test-Path (Join-Path $ScriptPath "${{ parameters.psName }}.ps1"))) { $Path = $ScriptPath }
+        else
+        {
+          $Script = Get-InstalledScript -Name ${{ parameters.psName }} -RequiredVersion ${{ parameters.version }}
+          $Path = $Script.InstalledLocation
+        }
+      }
+    }
+    Write-Host "${{ parameters.psType }} base path is $Path"
+    Write-Host "##vso[task.setvariable variable=basePath;isOutput=true]$($Path)"
+  name: getBasePath
+  displayName: 'Get ${{ parameters.psType }} Path'

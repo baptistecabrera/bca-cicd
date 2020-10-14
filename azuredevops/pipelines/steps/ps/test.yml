@@ -1,0 +1,159 @@
+parameters:
+- name: testName
+  type: string
+  default: 'Pester'
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: sourceDirectory
+  type: string
+- name: version
+  type: string
+  default: 'no_version'
+- name: installDependencies
+  type: boolean
+  default: true
+- name: skipPester
+  type: boolean
+  default: false
+- name: skipAnalyzer
+  type: boolean
+  default: false
+
+steps:
+- template: installDependencies.yml
+  parameters:
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    sourceDirectory: ${{ parameters.sourceDirectory }}
+    installDependencies: ${{ parameters.installDependencies }}
+- powershell: |
+    Find-Module PSScriptAnalyzer | Install-Module -Scope CurrentUser -Force
+    Invoke-ScriptAnalyzer -Path ./ -Settings PSGallery -Recurse -Severity Error -ReportSummary -EnableExit
+  displayName: 'Run PowerShell Script Analyzer'
+  workingDirectory: '${{ parameters.sourceDirectory }}'
+  condition: |
+   and(
+       succeeded(),
+       eq('${{ parameters.skipAnalyzer }}', false)
+   )
+#- task: PowerShell Script Analyzer@1
+#  displayName: 'Run PowerShell Script Analyzer'
+#  condition: |
+#    and(
+#        succeeded(),
+#        eq('${{ parameters.skipAnalyzer }}', false)
+#    )
+#  inputs:
+#    PsFolder: '${{ parameters.sourceDirectory }}'
+#    ExcludeRules: 'PSAvoidGlobalVars'
+#    Severity: 'Error'
+#    FailOnError: true
+- powershell: |
+    Find-Module Pester | Install-Module -Scope CurrentUser -Force
+    
+    $CodeCoverageResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Coverage.xml'
+    $TestResult = '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Tests.xml'
+
+    switch ('${{ parameters.psType }}')
+    {
+      'Module' { $CodeCoverage = "./Public/*" }
+      'Script' { $CodeCoverage = "./*" }
+    }
+
+    switch ('$(Agent.OS)')
+    {
+      'Windows_NT' { $Pester = Invoke-Pester -Path ./ -CodeCoverage $CodeCoverage -CodeCoverageOutputFile $CodeCoverageResult -OutputFile $TestResult -OutputFormat NUnitXml -PassThru -Strict }
+      default { $Pester = Invoke-Pester -Path ./ -OutputFile $TestResult -OutputFormat NUnitXml -ExcludeTagFilter WindowsOnly -PassThru -Strict }
+    }
+
+    #$Pester.Tests | ForEach-Object { "[{0}] {1} ({2})" -f $_.Result, ($_.Path -join ' > '), $_.Duration }
+    $Pester.Tests | ForEach-Object {
+      switch ($_.Result)
+      {
+        "Passed" { $Status = "section" }
+        "Failed" { $Status = "error" }
+        default { $Status = "warning" }
+      }
+      Write-Host ("##[{0}] [{1}] {2} ({3})" -f $Status, $_.Result, ($_.Path -join ' > '), $_.Duration)
+    }
+  displayName: 'Run Pester Tests and Coverage'
+  workingDirectory: '${{ parameters.sourceDirectory }}'
+  condition: eq('${{ parameters.skipPester }}', false)
+#- ${{ if eq(parameters.psType, 'Script') }}:
+#  - task: Pester@10
+#    displayName: 'Run Pester Tests and Coverage'
+#    condition: |
+#      and(
+#          succeeded(),
+#          eq('${{ parameters.skipPester }}', false),
+#          eq(variables['Agent.OS'], 'Windows_NT')
+#      )
+#    inputs:
+#      scriptFolder: "\"${{ parameters.sourceDirectory }}/*\""
+#      resultsFile: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Tests.xml'
+#      usePSCore: False
+#      excludeTag: 'SkipAutomated'
+#      CodeCoverageOutputFile: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Coverage.xml'
+#      CodeCoverageFolder: "\"${{ parameters.sourceDirectory }}/*\""
+#- ${{ if eq(parameters.psType, 'Module') }}:
+#  - task: Pester@10
+#    displayName: 'Run Pester Tests and Coverage'
+#    condition: |
+#      and(
+#          succeeded(),
+#          eq('${{ parameters.skipPester }}', false),
+#          eq(variables['Agent.OS'], 'Windows_NT')
+#      )
+#    inputs:
+#      scriptFolder: "\"${{ parameters.sourceDirectory }}/*\""
+#      resultsFile: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Tests.xml'
+#      usePSCore: False
+#      excludeTag: 'SkipAutomated'
+#      CodeCoverageOutputFile: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Coverage.xml'
+#      CodeCoverageFolder: "\"${{ parameters.sourceDirectory }}/Public/*\""
+#- task: Pester@10
+#  displayName: 'Run Pester Tests'
+#  condition: |
+#    and(
+#        succeeded(),
+#        eq('${{ parameters.skipPester }}', false),
+#        ne(variables['Agent.OS'], 'Windows_NT')
+#    )
+#  inputs:
+#    scriptFolder: "${{ parameters.sourceDirectory }}/*"
+#    resultsFile: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Tests.xml'
+#    excludeTag: 'WindowsOnly, SkipAutomated'
+#    usePSCore: False
+- task: PublishTestResults@2
+  displayName: 'Publish Test Results'
+  condition: eq('${{ parameters.skipPester }}', false)
+#  condition: |
+#    and(
+#        succeeded(),
+#        eq('${{ parameters.skipPester }}', false)
+#    )
+  inputs:
+    testResultsFormat: NUnit
+    testResultsFiles: '**/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Tests.xml'
+    searchFolder: $(Agent.TempDirectory)
+    mergeTestResults: true
+    failTaskOnFailedTests: true
+    testRunTitle: '${{ parameters.testName }} Tests on $(Agent.OS) for ${{ parameters.psName }} (${{ parameters.version }})'
+- task: PublishCodeCoverageResults@1
+  displayName: 'Publish Code Coverage'
+  condition: |
+    and(
+        eq('${{ parameters.skipPester }}', false),
+        eq(variables['Agent.OS'], 'Windows_NT')
+    )
+  inputs:
+    codeCoverageTool: 'JaCoCo'
+    summaryFileLocation: '$(Agent.TempDirectory)/${{ parameters.psName }}.${{ parameters.version }}.${{ parameters.testName }}.$(Agent.OS).Coverage.xml'
+    reportDirectory: '$(Agent.TempDirectory)/$(Agent.OS)'
+    pathToSources: "${{ parameters.sourceDirectory }}/Public/"

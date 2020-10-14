@@ -1,0 +1,11 @@
+variables:
+  - name: buildPoolName
+    value: 'Azure Pipelines'
+  - name: buildPoolWindowsVm
+    value: 'windows-latest'
+  - name: buildPoolWindowsVSVm
+    value: 'vs2017-win2016'
+  - name: buildPoolLinuxVm
+    value: 'ubuntu-latest'
+  - name: buildPoolMacOsVm
+    value: 'macOS-latest'

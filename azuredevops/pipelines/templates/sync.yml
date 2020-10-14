@@ -1,0 +1,31 @@
+parameters:
+- name: syncGitHub
+  displayName: Sync with GitHub
+  type: boolean
+  default: true
+
+trigger:
+- none
+
+# Fill in the release pipeline path in 'source'
+resources:
+  pipelines:
+  - pipeline: Release
+    source: Release\<releaseName>
+    trigger: 
+      branches:
+      - master
+  repositories:
+    - repository: bca-cicd
+      type: git
+      name: bca-cicd
+      #ref: refs/tags/v1.0
+
+variables:
+- template: azuredevops/pipelines/variables/all.yml@bca-cicd
+
+
+stages: 
+- template: azuredevops/pipelines/pipeline-sync-repo.yml@bca-cicd
+  parameters:
+    syncGitHub: ${{ parameters.syncGitHub }}

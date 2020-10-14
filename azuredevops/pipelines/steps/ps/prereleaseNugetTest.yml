@@ -1,0 +1,43 @@
+parameters:
+- name: psName
+  type: string
+- name: psType
+  type: string
+  default: 'Module'
+  values:
+    - Module
+    - Script
+- name: version
+  type: string
+- name: nugetName
+  type: string
+- name: nugetFeed
+  type: string
+- name: skipPester
+  type: boolean
+  default: false
+
+steps:
+- checkout: none
+- template: installFromNugetFeed.yml
+  parameters:
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    version: ${{ parameters.version }}
+    nugetName: ${{ parameters.nugetName }}
+    nugetFeed: ${{ parameters.nugetFeed }}
+- template: getBasePath.yml
+  parameters:
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    version: ${{ parameters.version }}
+- template: test.yml
+  parameters:
+    testName: NuGet
+    psName: ${{ parameters.psName }}
+    psType: ${{ parameters.psType }}
+    version: ${{ parameters.version }}
+    sourceDirectory: $(getBasePath.basePath)
+    installDependencies: false
+    skipPester: ${{ parameters.skipPester }}
+    skipAnalyzer: true
