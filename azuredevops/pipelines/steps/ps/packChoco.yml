@@ -25,11 +25,11 @@ steps:
     Move-Item -Path (Join-Path "$(Pipeline.Workspace)/choco/tools/${{ parameters.psName }}" ${{ parameters.chocoName }}.nuspec) -Destination (Join-Path $(Pipeline.Workspace) "choco")
     Move-Item -Path (Join-Path "$(Pipeline.Workspace)/choco/tools/${{ parameters.psName }}" "LICENSE*") -Destination (Join-Path (Join-Path $(Pipeline.Workspace) "choco/tools") "LICENSE.txt") -Force
   displayName: 'Move Package Files'
-- checkout: build-tools
+- checkout: bca-cicd
 - task: CopyFiles@2
   displayName: 'Copy Chocolatey Scripts'
   inputs:
-    SourceFolder: '$(Build.Repository.LocalPath)/build-tools/chocolatey/ps/${{ parameters.psType }}'
+    SourceFolder: '$(Build.Repository.LocalPath)/bca-cicd/chocolatey/ps/${{ parameters.psType }}'
     Contents: |
       chocolatey*.ps1
       VERIFICATION.txt
