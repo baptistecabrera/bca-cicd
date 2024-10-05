@@ -13,11 +13,14 @@ stages:
   - job: GitHub
     displayName: Mirror to GitHub
     steps:
+    - script:
+        echo '$(Build.Repository.Uri)'
+        echo '$(gitHubRepoUrl)'
     - task: swellaby.mirror-git-repository.mirror-git-repository-vsts-task.mirror-git-repository-vsts-task@1
       displayName: 'Mirror Git Repository'
       inputs:
         sourceGitRepositoryUri: '$(Build.Repository.Uri)'
-        sourceVerifySSLCertificate: false
+        sourceGitRepositoryPersonalAccessToken: $(system.accesstoken)
         destinationGitRepositoryUri: '$(gitHubRepoUrl)'
         destinationGitRepositoryPersonalAccessToken: '$(gitHubRepoPat)'
       env:
