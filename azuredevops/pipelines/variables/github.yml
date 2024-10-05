@@ -2,6 +2,8 @@ variables:
 - name: gitHubOrganization
   value: baptistecabrera
 - name: gitHubRepoUrl
+  value: 'https://github.com/$(gitHubOrganization)/$(Build.Repository.Name).git'
+- name: gitHubRepoUrlPAT
   value: 'https://$(gitHubRepoPat)@github.com/$(gitHubOrganization)/$(Build.Repository.Name).git'
 - name: gitHubNugetFeedCredentials
   value: 'GitHub-BaptisteCabrera'
