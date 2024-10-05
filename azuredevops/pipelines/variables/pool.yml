@@ -4,7 +4,7 @@ variables:
   - name: buildPoolWindowsVm
     value: 'windows-latest'
   - name: buildPoolWindowsVSVm
-    value: 'vs2017-win2016'
+    value: 'windows-latest'
   - name: buildPoolLinuxVm
     value: 'ubuntu-latest'
   - name: buildPoolMacOsVm
