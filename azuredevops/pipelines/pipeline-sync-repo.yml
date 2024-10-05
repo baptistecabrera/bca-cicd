@@ -16,10 +16,11 @@ stages:
     - script:
         echo '$(Build.Repository.Uri)'
         echo '$(gitHubRepoUrl)'
+        echo '$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_git/$(Build.Repository.Name)'
     - task: swellaby.mirror-git-repository.mirror-git-repository-vsts-task.mirror-git-repository-vsts-task@1
       displayName: 'Mirror Git Repository'
       inputs:
-        sourceGitRepositoryUri: '$(Build.Repository.Uri)'
+        sourceGitRepositoryUri: '$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_git/$(Build.Repository.Name)'
         sourceGitRepositoryPersonalAccessToken: $(system.accesstoken)
         destinationGitRepositoryUri: '$(gitHubRepoUrl)'
         destinationGitRepositoryPersonalAccessToken: '$(gitHubRepoPat)'
